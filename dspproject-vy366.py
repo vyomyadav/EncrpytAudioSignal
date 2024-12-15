@@ -84,37 +84,45 @@ class AudioEncryptDecryptApp:
             self.play_audio(self.audio_file)
 
     def encrypt_audio(self):
-        rate, data = read(self.audio_file)
-        is_stereo = len(data.shape) > 1
-        if is_stereo and data.shape[1] > 2:
-            data = data[:, :2]
-            messagebox.showwarning("Channel Reduction", "Audio has more than 2 channels. Only the first 2 channels will be used.")
-        elif not is_stereo:
-            data = np.expand_dims(data, axis=1)
+      rate, data = read(self.audio_file)
+      is_stereo = len(data.shape) > 1
+      if is_stereo and data.shape[1] > 2:
+          data = data[:, :2]
+          messagebox.showwarning("Channel Reduction", "Audio has more than 2 channels. Only the first 2 channels will be used.")
+      elif not is_stereo:
+          data = np.expand_dims(data, axis=1)
 
-        data = data.astype(np.float32)
-        max_val = np.max(np.abs(data))
-        normalized_data = data / max_val
+      data = data.astype(np.float32)
 
-        flattened_data = normalized_data.flatten()
-        size = int(np.ceil(np.sqrt(len(flattened_data))))
-        padded_data = np.zeros(size * size, dtype=np.float32)
-        padded_data[:len(flattened_data)] = flattened_data
-        square_matrix = padded_data.reshape((size, size))
+      # Normalize audio to -1.0 to 1.0 range
+      max_val = np.max(np.abs(data))
+      normalized_data = data / max_val
 
-        self.key = np.random.uniform(1.0, 10.0)
-        encrypted_matrix = square_matrix * self.key
+      flattened_data = normalized_data.flatten()
+      size = int(np.ceil(np.sqrt(len(flattened_data))))
+      padded_data = np.zeros(size * size, dtype=np.float32)
+      padded_data[:len(flattened_data)] = flattened_data
+      square_matrix = padded_data.reshape((size, size))
 
-        # Save encrypted data as a 16-bit grayscale image
-        encrypted_image = np.clip(encrypted_matrix * 65535, 0, 65535).astype('uint16')
-        cv2.imwrite("encrypted_audio.png", encrypted_image)
+      self.key = np.random.uniform(1.0, 10.0)
+      encrypted_matrix = square_matrix * self.key
 
-        # Save metadata
-        np.savez("metadata.npz", key=self.key, max_val=max_val, original_shape=data.shape, audio_length=len(flattened_data))
+      # Scale encrypted matrix to 16-bit range
+      min_val = np.min(encrypted_matrix)
+      max_val_matrix = np.max(encrypted_matrix)
+      scaled_matrix = ((encrypted_matrix - min_val) / (max_val_matrix - min_val)) * 65535
+      encrypted_image = np.clip(scaled_matrix, 0, 65535).astype('uint16')
 
-        self.decrypt_button.config(state=tk.NORMAL)
-        self.plot_button.config(state=tk.NORMAL)
-        messagebox.showinfo("Encryption Complete", "Audio encrypted and saved as an image.")
+      # Save encrypted image and metadata
+      cv2.imwrite("encrypted_audio.png", encrypted_image)
+      np.savez("metadata.npz", key=self.key, max_val=max_val, min_val=min_val, 
+              max_val_matrix=max_val_matrix, original_shape=data.shape, 
+              audio_length=len(flattened_data))
+
+      self.decrypt_button.config(state=tk.NORMAL)
+      self.plot_button.config(state=tk.NORMAL)
+      messagebox.showinfo("Encryption Complete", "Audio encrypted and saved as an image.")
+
 
     def decrypt_audio(self):
       if not self.encrypted_image or not self.metadata_file:
@@ -125,21 +133,30 @@ class AudioEncryptDecryptApp:
       metadata = np.load(self.metadata_file)
       key = metadata["key"]
       max_val = metadata["max_val"]
+      min_val = metadata["min_val"]
+      max_val_matrix = metadata["max_val_matrix"]
       original_shape = metadata["original_shape"]
       audio_length = metadata["audio_length"]
 
       # Load encrypted image
-      encrypted_image = cv2.imread(self.encrypted_image, cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535
+      encrypted_image = cv2.imread(self.encrypted_image, cv2.IMREAD_UNCHANGED).astype(np.float32)
 
-      # Decrypt the audio signal
-      decrypted_matrix = encrypted_image / key
+      # Restore original range of the encrypted matrix
+      encrypted_matrix = (encrypted_image / 65535) * (max_val_matrix - min_val) + min_val
+      decrypted_matrix = encrypted_matrix / key  # Reverse key multiplication
+
+      # Flatten and truncate to original audio length
       flattened_data = decrypted_matrix.flatten()[:audio_length]
 
-      # Reshape and scale back to the original amplitude range
-      audio_data = flattened_data.reshape(original_shape) * max_val
+      # Reshape to the original shape
+      audio_data = flattened_data.reshape(original_shape)
 
-      # Center the waveform around zero
-      audio_data -= np.mean(audio_data)
+      # Scale back to the original amplitude range
+      audio_data = audio_data * max_val  # Restore amplitude
+
+      # Debugging
+      print("Decrypted Signal Stats:")
+      print(f"Mean: {np.mean(audio_data)}, Min: {np.min(audio_data)}, Max: {np.max(audio_data)}")
 
       # Save the decrypted audio
       write(self.decrypted_audio, 44100, audio_data.astype(np.int16))
@@ -180,7 +197,7 @@ class AudioEncryptDecryptApp:
           plt.legend()
       else:
           plt.plot(decrypted_data, color="green")
-      plt.ylim(-np.max(np.abs(decrypted_data)), np.max(np.abs(decrypted_data)))
+      plt.ylim(-6000, 6000)
 
       # Spectrogram Comparison
       plt.subplot(3, 1, 3)
