@@ -1,4 +1,4 @@
-# **Audio Encryption and Decryption **
+# **Audio Encryption and Decryption**
 
 ## **Overview**
 
