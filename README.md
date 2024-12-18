@@ -1,4 +1,4 @@
-# **Audio Encryption and Decryption GUI**
+# **Audio Encryption and Decryption **
 
 ## **Overview**
 
